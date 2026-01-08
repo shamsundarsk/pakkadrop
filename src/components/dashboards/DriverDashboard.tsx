@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../../providers/AuthProvider'
+import { deliveryService, useDeliveries, type Delivery } from '../../services/deliveryService'
 import { 
   Truck, 
   MapPin, 
@@ -17,90 +18,104 @@ import {
   Wallet
 } from 'lucide-react'
 
-interface DeliveryJob {
-  id: string
-  pickup: {
-    address: string
-    contactName: string
-    contactPhone: string
-  }
-  dropoff: {
-    address: string
-    contactName: string
-    contactPhone: string
-  }
-  packageType: string
-  weight: number
-  fare: number
-  distance: string
-  estimatedTime: string
-  status: 'AVAILABLE' | 'ACCEPTED' | 'IN_PROGRESS' | 'COMPLETED'
-}
+
 
 const DriverDashboard = () => {
   const { user, logout } = useAuth()
   const [isOnline, setIsOnline] = useState(false)
   const [currentLocation, setCurrentLocation] = useState<string>('Mumbai, Maharashtra')
   const [activeTab, setActiveTab] = useState<'jobs' | 'earnings' | 'profile'>('jobs')
+  const [acceptedJobs, setAcceptedJobs] = useState<string[]>([]) // Track accepted job IDs
   
-  // Mock data - replace with real API calls
-  const [stats] = useState({
-    todayEarnings: 1250,
-    weeklyEarnings: 8750,
-    monthlyEarnings: 35000,
-    completedDeliveries: 142,
-    rating: 4.8,
-    totalDistance: '2,450 km'
-  })
-
-  const [availableJobs] = useState<DeliveryJob[]>([
-    {
-      id: '1',
-      pickup: {
-        address: 'Bandra West, Mumbai',
-        contactName: 'Rajesh Kumar',
-        contactPhone: '+91 98765 43210'
-      },
-      dropoff: {
-        address: 'Andheri East, Mumbai',
-        contactName: 'Priya Sharma',
-        contactPhone: '+91 87654 32109'
-      },
-      packageType: 'Electronics',
-      weight: 2.5,
-      fare: 180,
-      distance: '8.2 km',
-      estimatedTime: '25 min',
-      status: 'AVAILABLE'
-    },
-    {
-      id: '2',
-      pickup: {
-        address: 'Powai, Mumbai',
-        contactName: 'Tech Solutions Ltd',
-        contactPhone: '+91 76543 21098'
-      },
-      dropoff: {
-        address: 'Goregaon West, Mumbai',
-        contactName: 'Mumbai Enterprises',
-        contactPhone: '+91 65432 10987'
-      },
-      packageType: 'Documents',
-      weight: 0.5,
-      fare: 120,
-      distance: '12.5 km',
-      estimatedTime: '35 min',
-      status: 'AVAILABLE'
-    }
-  ])
+  // Use shared delivery service
+  const { deliveries, loading, acceptDelivery, getAvailableJobs, getDriverDeliveries } = useDeliveries()
+  
+  // Get available jobs and driver's deliveries
+  const availableJobs = getAvailableJobs()
+  const driverDeliveries = user?.id ? getDriverDeliveries(user.id) : []
+  
+  // Calculate stats from actual deliveries
+  const stats = {
+    todayEarnings: driverDeliveries
+      .filter(d => {
+        const today = new Date()
+        const deliveryDate = new Date(d.createdAt)
+        return deliveryDate.toDateString() === today.toDateString() && d.status === 'DELIVERED'
+      })
+      .reduce((sum, d) => sum + d.fare, 0),
+    weeklyEarnings: driverDeliveries
+      .filter(d => {
+        const weekAgo = new Date()
+        weekAgo.setDate(weekAgo.getDate() - 7)
+        return new Date(d.createdAt) >= weekAgo && d.status === 'DELIVERED'
+      })
+      .reduce((sum, d) => sum + d.fare, 0),
+    monthlyEarnings: driverDeliveries
+      .filter(d => {
+        const monthAgo = new Date()
+        monthAgo.setMonth(monthAgo.getMonth() - 1)
+        return new Date(d.createdAt) >= monthAgo && d.status === 'DELIVERED'
+      })
+      .reduce((sum, d) => sum + d.fare, 0),
+    completedDeliveries: driverDeliveries.filter(d => d.status === 'DELIVERED').length,
+    rating: 4.8, // Mock rating - in real app, calculate from reviews
+    totalDistance: '2,450 km' // Mock - in real app, sum from all deliveries
+  }
 
   const toggleOnlineStatus = () => {
     setIsOnline(!isOnline)
+    if (!isOnline) {
+      // Simulate getting current location when going online
+      navigator.geolocation?.getCurrentPosition(
+        (position) => {
+          console.log('Location updated:', position.coords)
+          // In real app, this would update the driver's location in the database
+        },
+        (error) => {
+          console.error('Location error:', error)
+        }
+      )
+    }
   }
 
-  const acceptJob = (jobId: string) => {
-    console.log('Accepting job:', jobId)
-    // Implement job acceptance logic
+  const acceptJob = async (jobId: string) => {
+    if (!isOnline) {
+      alert('Please go online first to accept jobs')
+      return
+    }
+
+    if (!user?.id || !user?.name) {
+      alert('Please complete your profile to accept jobs')
+      return
+    }
+
+    try {
+      console.log('Accepting job:', jobId)
+      
+      // Accept the delivery using shared service
+      const success = acceptDelivery(
+        jobId, 
+        user.id, 
+        user.name, 
+        user.phone || ''
+      )
+      
+      if (success) {
+        // Add to accepted jobs for UI feedback
+        setAcceptedJobs(prev => [...prev, jobId])
+        
+        // Show success message
+        alert(`🎉 Job ${jobId} accepted successfully! Customer has been notified.`)
+        
+        console.log('✅ Job accepted successfully')
+      } else {
+        alert('Failed to accept job. It may have been taken by another driver.')
+      }
+      
+    } catch (error) {
+      console.error('Error accepting job:', error)
+      alert('Failed to accept job. Please try again.')
+    }
   }
 
   return (
@@ -291,58 +306,126 @@ const DriverDashboard = () => {
                   </span>
                 </div>
 
-                {availableJobs.map((job) => (
-                  <div key={job.id} className="border border-slate-200 rounded-lg p-4 hover:border-slate-300 transition-colors">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-2 mb-3">
-                          <span className="bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded">
-                            {job.packageType}
-                          </span>
-                          <span className="text-sm text-slate-600">{job.weight} kg</span>
-                        </div>
-
-                        <div className="space-y-2 mb-4">
-                          <div className="flex items-start space-x-3">
-                            <div className="w-3 h-3 bg-blue-500 rounded-full mt-1.5"></div>
-                            <div>
-                              <p className="font-medium text-slate-900">{job.pickup.address}</p>
-                              <p className="text-sm text-slate-600">{job.pickup.contactName}</p>
-                            </div>
-                          </div>
-                          <div className="flex items-start space-x-3">
-                            <div className="w-3 h-3 bg-green-500 rounded-full mt-1.5"></div>
-                            <div>
-                              <p className="font-medium text-slate-900">{job.dropoff.address}</p>
-                              <p className="text-sm text-slate-600">{job.dropoff.contactName}</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center space-x-4 text-sm text-slate-600">
-                          <div className="flex items-center space-x-1">
-                            <MapPin className="w-4 h-4" />
-                            <span>{job.distance}</span>
-                          </div>
-                          <div className="flex items-center space-x-1">
-                            <Clock className="w-4 h-4" />
-                            <span>{job.estimatedTime}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="text-right">
-                        <p className="text-2xl font-bold text-slate-900">₹{job.fare}</p>
-                        <button
-                          onClick={() => acceptJob(job.id)}
-                          className="mt-3 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg font-medium"
-                        >
-                          Accept Job
-                        </button>
-                      </div>
-                    </div>
+                {loading ? (
+                  <div className="text-center py-8">
+                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-900 mx-auto mb-2"></div>
+                    <p className="text-slate-600">Loading jobs...</p>
                   </div>
-                ))}
+                ) : availableJobs.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Package className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                    <h3 className="text-lg font-medium text-slate-900 mb-2">No jobs available</h3>
+                    <p className="text-slate-600">
+                      {isOnline ? 'New delivery requests will appear here' : 'Go online to see available jobs'}
+                    </p>
+                  </div>
+                ) : (
+                  availableJobs.map((job) => {
+                    const isAccepted = acceptedJobs.includes(job.id) || job.driverId === user?.id
+                    
+                    return (
+                      <div key={job.id} className={`border rounded-lg p-4 transition-colors ${
+                        isAccepted 
+                          ? 'border-green-500 bg-green-50' 
+                          : 'border-slate-200 hover:border-slate-300'
+                      }`}>
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center space-x-2 mb-3">
+                              <span className={`text-xs font-medium px-2.5 py-0.5 rounded ${
+                                isAccepted 
+                                  ? 'bg-green-100 text-green-800' 
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}>
+                                {isAccepted ? 'ACCEPTED' : job.packageType}
+                              </span>
+                              <span className="text-sm text-slate-600">{job.weight} kg</span>
+                              {job.deliveryType === 'POOL' && (
+                                <span className="bg-purple-100 text-purple-800 text-xs font-medium px-2 py-0.5 rounded">
+                                  POOL
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="space-y-2 mb-4">
+                              <div className="flex items-start space-x-3">
+                                <div className="w-3 h-3 bg-blue-500 rounded-full mt-1.5"></div>
+                                <div>
+                                  <p className="font-medium text-slate-900">{job.pickup.address}</p>
+                                  <p className="text-sm text-slate-600">{job.pickup.contactName}</p>
+                                  <p className="text-xs text-slate-500">{job.pickup.contactPhone}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-start space-x-3">
+                                <div className="w-3 h-3 bg-green-500 rounded-full mt-1.5"></div>
+                                <div>
+                                  <p className="font-medium text-slate-900">{job.dropoff.address}</p>
+                                  <p className="text-sm text-slate-600">{job.dropoff.contactName}</p>
+                                  <p className="text-xs text-slate-500">{job.dropoff.contactPhone}</p>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center space-x-4 text-sm text-slate-600">
+                              <div className="flex items-center space-x-1">
+                                <MapPin className="w-4 h-4" />
+                                <span>{job.distance}</span>
+                              </div>
+                              <div className="flex items-center space-x-1">
+                                <Clock className="w-4 h-4" />
+                                <span>{job.estimatedTime}</span>
+                              </div>
+                              <div className="flex items-center space-x-1">
+                                <DollarSign className="w-4 h-4" />
+                                <span>{job.paymentMethod}</span>
+                              </div>
+                            </div>
+
+                            {job.specialInstructions && (
+                              <div className="mt-2 p-2 bg-yellow-50 rounded text-sm">
+                                <strong>Instructions:</strong> {job.specialInstructions}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="text-right">
+                            <p className="text-2xl font-bold text-slate-900">₹{job.fare}</p>
+                            {isAccepted ? (
+                              <div className="mt-3 space-y-2">
+                                <div className="flex items-center text-green-600 text-sm">
+                                  <CheckCircle className="w-4 h-4 mr-1" />
+                                  <span>Job Accepted</span>
+                                </div>
+                                <div className="flex space-x-2">
+                                  <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">
+                                    <Navigation className="w-3 h-3 inline mr-1" />
+                                    Navigate
+                                  </button>
+                                  <button className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm">
+                                    <Phone className="w-3 h-3 inline mr-1" />
+                                    Call
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => acceptJob(job.id)}
+                                disabled={!isOnline}
+                                className={`mt-3 px-4 py-2 rounded-lg font-medium ${
+                                  isOnline
+                                    ? 'bg-slate-900 hover:bg-slate-800 text-white'
+                                    : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                                }`}
+                              >
+                                {isOnline ? 'Accept Job' : 'Go Online First'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
               </div>
             )}
 

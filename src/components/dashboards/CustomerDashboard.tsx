@@ -1,6 +1,8 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useAuth } from '../../providers/AuthProvider'
 import Map from '../Map'
+import { poolingService, createPoolRequest } from '../../services/poolingService'
+import { deliveryService, useDeliveries, type Delivery } from '../../services/deliveryService'
 import { 
   Package, 
   MapPin, 
@@ -18,29 +20,19 @@ import {
   Users
 } from 'lucide-react'
 
-interface Delivery {
-  id: string
-  status: 'PENDING' | 'ACCEPTED' | 'PICKED_UP' | 'IN_TRANSIT' | 'DELIVERED' | 'CANCELLED'
-  pickup: {
-    address: string
-    contactName: string
-    contactPhone: string
-  }
-  dropoff: {
-    address: string
-    contactName: string
-    contactPhone: string
-  }
+interface DeliveryForm {
+  pickupAddress: string
+  pickupContactName: string
+  pickupContactPhone: string
+  dropoffAddress: string
+  dropoffContactName: string
+  dropoffContactPhone: string
   packageType: string
   weight: number
-  fare: number
-  distance: string
-  estimatedTime: string
-  driverName?: string
-  driverPhone?: string
-  driverRating?: number
-  createdAt: string
-  deliveredAt?: string
+  vehicleType: string
+  specialInstructions: string
+  deliveryType: 'EXPRESS' | 'POOL'
+  paymentMethod: 'UPI' | 'CARD' | 'CASH'
 }
 
 const CustomerDashboard = () => {
@@ -48,62 +40,199 @@ const CustomerDashboard = () => {
   const [activeTab, setActiveTab] = useState<'active' | 'history' | 'create'>('active')
   const [showCreateDelivery, setShowCreateDelivery] = useState(false)
   
-  // Mock data - replace with real API calls
-  const [stats] = useState({
-    totalDeliveries: 45,
-    activeDeliveries: 2,
-    monthlySpent: 12500,
-    savedAmount: 3200
+  // Use shared delivery service
+  const { deliveries, loading, createDelivery, getCustomerDeliveries, getStats } = useDeliveries()
+  
+  // Get customer-specific deliveries
+  const customerDeliveries = user?.id ? getCustomerDeliveries(user.id) : []
+  const activeDeliveries = customerDeliveries.filter(d => 
+    ['PENDING', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT'].includes(d.status)
+  )
+  const completedDeliveries = customerDeliveries.filter(d => 
+    d.status === 'DELIVERED'
+  )
+  
+  // Listen for real-time delivery updates
+  useEffect(() => {
+    const handleDeliveryAccepted = (delivery: any) => {
+      if (delivery.customerId === user?.id) {
+        console.log('✅ Your delivery was accepted by driver:', delivery.driverName)
+        // The deliveries will automatically update through the useDeliveries hook
+      }
+    }
+
+    const handleDeliveryStatusUpdate = (data: any) => {
+      const { delivery } = data
+      if (delivery.customerId === user?.id) {
+        console.log('✅ Your delivery status updated:', delivery.status)
+        // The deliveries will automatically update through the useDeliveries hook
+      }
+    }
+
+    // Subscribe to delivery events
+    deliveryService.on('deliveryAccepted', handleDeliveryAccepted)
+    deliveryService.on('deliveryStatusUpdated', handleDeliveryStatusUpdate)
+
+    return () => {
+      deliveryService.off('deliveryAccepted', handleDeliveryAccepted)
+      deliveryService.off('deliveryStatusUpdated', handleDeliveryStatusUpdate)
+    }
+  }, [user?.id])
+  
+  // Calculate stats
+  const stats = {
+    totalDeliveries: customerDeliveries.length,
+    activeDeliveries: activeDeliveries.length,
+    monthlySpent: customerDeliveries.reduce((sum, d) => sum + d.fare, 0),
+    savedAmount: customerDeliveries
+      .filter(d => d.deliveryType === 'POOL')
+      .reduce((sum, d) => sum + (d.fare * 0.4), 0) // 40% savings calculation
+  }
+  
+  // Form state for creating new delivery
+  const [deliveryForm, setDeliveryForm] = useState<DeliveryForm>({
+    pickupAddress: '',
+    pickupContactName: '',
+    pickupContactPhone: '',
+    dropoffAddress: '',
+    dropoffContactName: '',
+    dropoffContactPhone: '',
+    packageType: '',
+    weight: 0,
+    vehicleType: '',
+    specialInstructions: '',
+    deliveryType: 'POOL', // Default to pool for savings
+    paymentMethod: 'UPI' // Default to UPI
   })
 
-  const [deliveries] = useState<Delivery[]>([
-    {
-      id: '1',
-      status: 'IN_TRANSIT',
-      pickup: {
-        address: 'Bandra West, Mumbai',
-        contactName: 'John Doe',
-        contactPhone: '+91 98765 43210'
-      },
-      dropoff: {
-        address: 'Andheri East, Mumbai',
-        contactName: 'Jane Smith',
-        contactPhone: '+91 87654 32109'
-      },
-      packageType: 'Electronics',
-      weight: 2.5,
-      fare: 180,
-      distance: '8.2 km',
-      estimatedTime: '25 min',
-      driverName: 'Rajesh Kumar',
-      driverPhone: '+91 76543 21098',
-      driverRating: 4.8,
-      createdAt: '2024-01-08T10:30:00Z'
-    },
-    {
-      id: '2',
-      status: 'ACCEPTED',
-      pickup: {
-        address: 'Powai, Mumbai',
-        contactName: 'Tech Solutions Ltd',
-        contactPhone: '+91 76543 21098'
-      },
-      dropoff: {
-        address: 'Goregaon West, Mumbai',
-        contactName: 'Mumbai Enterprises',
-        contactPhone: '+91 65432 10987'
-      },
-      packageType: 'Documents',
-      weight: 0.5,
-      fare: 120,
-      distance: '12.5 km',
-      estimatedTime: '35 min',
-      driverName: 'Priya Sharma',
-      driverPhone: '+91 54321 09876',
-      driverRating: 4.6,
-      createdAt: '2024-01-08T11:15:00Z'
+  // Fare calculation based on form data
+  const calculateFare = () => {
+    const baseFare = 50
+    const distanceCost = 82 // Mock calculation
+    const total = baseFare + distanceCost
+    const poolDiscount = deliveryForm.deliveryType === 'POOL' ? total * 0.4 : 0
+    return {
+      baseFare,
+      distanceCost,
+      poolDiscount,
+      total: total - poolDiscount
     }
-  ])
+  }
+
+  const fare = calculateFare()
+
+  // Handle form input changes
+  const handleFormChange = (field: keyof DeliveryForm, value: string | number) => {
+    setDeliveryForm(prev => ({
+      ...prev,
+      [field]: value
+    }))
+  }
+
+  // Handle form submission
+  const handleSubmitDelivery = async (e: React.FormEvent) => {
+    e.preventDefault()
+    
+    // Validate required fields
+    if (!deliveryForm.pickupAddress || !deliveryForm.dropoffAddress || !deliveryForm.packageType) {
+      alert('Please fill in all required fields')
+      return
+    }
+
+    if (!user?.id) {
+      alert('Please log in to create a delivery')
+      return
+    }
+
+    try {
+      console.log('Creating delivery:', deliveryForm)
+      
+      // Calculate distance and fare (mock calculation)
+      const mockDistance = (Math.random() * 15 + 5).toFixed(1) // 5-20 km
+      const mockTime = Math.round(parseFloat(mockDistance) * 2.5 + 15) // rough time calculation
+      
+      // Create delivery using shared service
+      const newDelivery = createDelivery({
+        customerId: user.id,
+        customerName: user.name || 'Customer',
+        customerPhone: user.phone || '',
+        pickup: {
+          address: deliveryForm.pickupAddress,
+          contactName: deliveryForm.pickupContactName || user.name || 'Customer',
+          contactPhone: deliveryForm.pickupContactPhone || user.phone || '',
+          lat: 19.0760 + (Math.random() - 0.5) * 0.1, // Mock coordinates
+          lng: 72.8777 + (Math.random() - 0.5) * 0.1
+        },
+        dropoff: {
+          address: deliveryForm.dropoffAddress,
+          contactName: deliveryForm.dropoffContactName,
+          contactPhone: deliveryForm.dropoffContactPhone,
+          lat: 19.0760 + (Math.random() - 0.5) * 0.1, // Mock coordinates
+          lng: 72.8777 + (Math.random() - 0.5) * 0.1
+        },
+        packageType: deliveryForm.packageType,
+        weight: deliveryForm.weight || 1,
+        vehicleType: deliveryForm.vehicleType || 'bike',
+        deliveryType: deliveryForm.deliveryType,
+        paymentMethod: deliveryForm.paymentMethod,
+        specialInstructions: deliveryForm.specialInstructions,
+        fare: fare.total,
+        distance: `${mockDistance} km`,
+        estimatedTime: `${mockTime} min`
+      })
+      
+      let poolId = null
+      let poolInfo = null
+      
+      // If pool delivery is selected, try to find or create a pool
+      if (deliveryForm.deliveryType === 'POOL') {
+        const poolRequest = createPoolRequest({
+          ...deliveryForm,
+          customerId: user.id
+        })
+        
+        poolId = poolingService.addPoolRequest(poolRequest)
+        poolInfo = poolingService.getPool(poolId)
+        
+        console.log('Pool created/joined:', poolId, poolInfo)
+      }
+      
+      // Show success message
+      const successMessage = deliveryForm.deliveryType === 'POOL' && poolInfo && poolInfo.requests.length > 1
+        ? `🎉 Pool delivery booked! Matched with ${poolInfo.requests.length - 1} other customer(s). 
+           Order ID: ${newDelivery.id}
+           Total: ₹${fare.total.toFixed(0)}
+           
+           Your order is now visible to drivers!`
+        : `🎉 Delivery booked successfully! 
+           Order ID: ${newDelivery.id}
+           Total: ₹${fare.total.toFixed(0)}
+           
+           Your order is now visible to drivers!`
+      
+      alert(successMessage)
+      
+      // Reset form and switch to active tab
+      setDeliveryForm({
+        pickupAddress: '',
+        pickupContactName: '',
+        pickupContactPhone: '',
+        dropoffAddress: '',
+        dropoffContactName: '',
+        dropoffContactPhone: '',
+        packageType: '',
+        weight: 0,
+        vehicleType: '',
+        specialInstructions: '',
+        deliveryType: 'POOL',
+        paymentMethod: 'UPI'
+      })
+      setActiveTab('active')
+    } catch (error) {
+      console.error('Error creating delivery:', error)
+      alert('Failed to create delivery. Please try again.')
+    }
+  }
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -264,7 +393,7 @@ const CustomerDashboard = () => {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-lg font-semibold text-slate-900">
-                    Active Deliveries
+                    Active Deliveries ({activeDeliveries.length})
                   </h3>
                   <div className="flex items-center space-x-2">
                     <button className="p-2 text-slate-400 hover:text-slate-600">
@@ -276,7 +405,18 @@ const CustomerDashboard = () => {
                   </div>
                 </div>
 
-                {deliveries.filter(d => ['PENDING', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT'].includes(d.status)).map((delivery) => (
+                {/* Debug info - remove in production */}
+                {process.env.NODE_ENV === 'development' && (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm">
+                    <strong>Debug Info:</strong> 
+                    <br />Total deliveries: {customerDeliveries.length}
+                    <br />Active deliveries: {activeDeliveries.length}
+                    <br />Customer ID: {user?.id}
+                    <br />Loading: {loading ? 'Yes' : 'No'}
+                  </div>
+                )}
+
+                {activeDeliveries.map((delivery) => (
                   <div key={delivery.id} className="border border-slate-200 rounded-lg p-6 hover:border-slate-300 transition-colors">
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex items-center space-x-3">
@@ -344,7 +484,7 @@ const CustomerDashboard = () => {
                               <p className="font-medium text-slate-900">{delivery.driverName}</p>
                               <div className="flex items-center space-x-1">
                                 <Star className="w-4 h-4 text-yellow-400 fill-current" />
-                                <span className="text-sm text-slate-600">{delivery.driverRating}</span>
+                                <span className="text-sm text-slate-600">4.8</span>
                               </div>
                             </div>
                           </div>
@@ -381,7 +521,7 @@ const CustomerDashboard = () => {
                   </div>
                 ))}
 
-                {deliveries.filter(d => ['PENDING', 'ACCEPTED', 'PICKED_UP', 'IN_TRANSIT'].includes(d.status)).length === 0 && (
+                {activeDeliveries.length === 0 ? (
                   <div className="text-center py-12">
                     <Package className="w-12 h-12 text-slate-300 mx-auto mb-4" />
                     <h3 className="text-lg font-medium text-slate-900 mb-2">No active deliveries</h3>
@@ -393,18 +533,80 @@ const CustomerDashboard = () => {
                       Create Delivery
                     </button>
                   </div>
-                )}
+                ) : null}
               </div>
             )}
 
             {activeTab === 'history' && (
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold text-slate-900">Delivery History</h3>
-                <div className="text-center py-12">
-                  <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-slate-900 mb-2">Delivery history</h3>
-                  <p className="text-slate-600">Your completed deliveries will appear here</p>
-                </div>
+                
+                {completedDeliveries.length > 0 ? (
+                  <div className="space-y-4">
+                    {completedDeliveries.map((delivery) => (
+                      <div key={delivery.id} className="border border-slate-200 rounded-lg p-6">
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-xs font-medium">
+                              DELIVERED
+                            </span>
+                            <span className="text-sm text-slate-600">#{delivery.id}</span>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xl font-bold text-slate-900">₹{delivery.fare}</p>
+                            <p className="text-sm text-slate-600">{delivery.distance} • {delivery.estimatedTime}</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                          <div>
+                            <p className="text-sm font-medium text-slate-700">From</p>
+                            <p className="text-slate-900">{delivery.pickup.address}</p>
+                            <p className="text-sm text-slate-600">{delivery.pickup.contactName}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium text-slate-700">To</p>
+                            <p className="text-slate-900">{delivery.dropoff.address}</p>
+                            <p className="text-sm text-slate-600">{delivery.dropoff.contactName}</p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-between text-sm text-slate-600">
+                          <div className="flex items-center space-x-4">
+                            <span>{delivery.packageType} • {delivery.weight}kg</span>
+                            <span>{delivery.deliveryType === 'POOL' ? 'Pool Delivery' : 'Express Delivery'}</span>
+                          </div>
+                          <span>Delivered on {new Date(delivery.deliveredAt || delivery.createdAt).toLocaleDateString()}</span>
+                        </div>
+
+                        {delivery.driverName && (
+                          <div className="mt-4 pt-4 border-t border-slate-200">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <p className="text-sm font-medium text-slate-700">Delivered by</p>
+                                <p className="text-slate-900">{delivery.driverName}</p>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <button className="text-blue-600 hover:text-blue-700 text-sm font-medium">
+                                  Rate Driver
+                                </button>
+                                <button className="text-slate-600 hover:text-slate-700 text-sm font-medium">
+                                  Reorder
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-12">
+                    <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                    <h3 className="text-lg font-medium text-slate-900 mb-2">No delivery history</h3>
+                    <p className="text-slate-600">Your completed deliveries will appear here</p>
+                  </div>
+                )}
               </div>
             )}
 
@@ -426,7 +628,14 @@ const CustomerDashboard = () => {
                 <div className="bg-white border border-slate-200 rounded-lg p-4">
                   <h4 className="font-medium text-slate-900 mb-3">Delivery Type</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="border border-slate-300 rounded-lg p-3 hover:border-slate-400 cursor-pointer">
+                    <div 
+                      onClick={() => handleFormChange('deliveryType', 'EXPRESS')}
+                      className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                        deliveryForm.deliveryType === 'EXPRESS' 
+                          ? 'border-blue-500 bg-blue-50' 
+                          : 'border-slate-300 hover:border-slate-400'
+                      }`}
+                    >
                       <div className="flex items-center space-x-3">
                         <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
                           <Package className="w-4 h-4 text-blue-600" />
@@ -434,10 +643,18 @@ const CustomerDashboard = () => {
                         <div>
                           <p className="font-medium text-slate-900">Express Delivery</p>
                           <p className="text-sm text-slate-600">Fast, direct delivery</p>
+                          <p className="text-xs text-blue-600 font-medium">Standard pricing</p>
                         </div>
                       </div>
                     </div>
-                    <div className="border border-blue-500 bg-blue-50 rounded-lg p-3 cursor-pointer">
+                    <div 
+                      onClick={() => handleFormChange('deliveryType', 'POOL')}
+                      className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                        deliveryForm.deliveryType === 'POOL' 
+                          ? 'border-green-500 bg-green-50' 
+                          : 'border-slate-300 hover:border-slate-400'
+                      }`}
+                    >
                       <div className="flex items-center space-x-3">
                         <div className="w-8 h-8 bg-green-100 rounded-lg flex items-center justify-center">
                           <Users className="w-4 h-4 text-green-600" />
@@ -452,14 +669,17 @@ const CustomerDashboard = () => {
                   </div>
                 </div>
 
-                <form className="space-y-6">
+                <form onSubmit={handleSubmitDelivery} className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-4">
                       <h4 className="font-medium text-slate-900">Pickup Details</h4>
                       <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Pickup Address</label>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Pickup Address *</label>
                         <input
                           type="text"
+                          required
+                          value={deliveryForm.pickupAddress}
+                          onChange={(e) => handleFormChange('pickupAddress', e.target.value)}
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
                           placeholder="Enter pickup address"
                         />
@@ -468,6 +688,8 @@ const CustomerDashboard = () => {
                         <label className="block text-sm font-medium text-slate-700 mb-1">Contact Name</label>
                         <input
                           type="text"
+                          value={deliveryForm.pickupContactName}
+                          onChange={(e) => handleFormChange('pickupContactName', e.target.value)}
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
                           placeholder="Contact person name"
                         />
@@ -476,6 +698,8 @@ const CustomerDashboard = () => {
                         <label className="block text-sm font-medium text-slate-700 mb-1">Contact Phone</label>
                         <input
                           type="tel"
+                          value={deliveryForm.pickupContactPhone}
+                          onChange={(e) => handleFormChange('pickupContactPhone', e.target.value)}
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
                           placeholder="+91 98765 43210"
                         />
@@ -485,9 +709,12 @@ const CustomerDashboard = () => {
                     <div className="space-y-4">
                       <h4 className="font-medium text-slate-900">Dropoff Details</h4>
                       <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Dropoff Address</label>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Dropoff Address *</label>
                         <input
                           type="text"
+                          required
+                          value={deliveryForm.dropoffAddress}
+                          onChange={(e) => handleFormChange('dropoffAddress', e.target.value)}
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
                           placeholder="Enter dropoff address"
                         />
@@ -496,6 +723,8 @@ const CustomerDashboard = () => {
                         <label className="block text-sm font-medium text-slate-700 mb-1">Contact Name</label>
                         <input
                           type="text"
+                          value={deliveryForm.dropoffContactName}
+                          onChange={(e) => handleFormChange('dropoffContactName', e.target.value)}
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
                           placeholder="Contact person name"
                         />
@@ -504,6 +733,8 @@ const CustomerDashboard = () => {
                         <label className="block text-sm font-medium text-slate-700 mb-1">Contact Phone</label>
                         <input
                           type="tel"
+                          value={deliveryForm.dropoffContactPhone}
+                          onChange={(e) => handleFormChange('dropoffContactPhone', e.target.value)}
                           className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
                           placeholder="+91 98765 43210"
                         />
@@ -513,8 +744,13 @@ const CustomerDashboard = () => {
 
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Package Type</label>
-                      <select className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500">
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Package Type *</label>
+                      <select 
+                        required
+                        value={deliveryForm.packageType}
+                        onChange={(e) => handleFormChange('packageType', e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                      >
                         <option value="">Select package type</option>
                         <option value="documents">Documents</option>
                         <option value="electronics">Electronics</option>
@@ -528,13 +764,20 @@ const CustomerDashboard = () => {
                       <input
                         type="number"
                         step="0.1"
+                        min="0"
+                        value={deliveryForm.weight || ''}
+                        onChange={(e) => handleFormChange('weight', parseFloat(e.target.value) || 0)}
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
                         placeholder="0.0"
                       />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Vehicle Type</label>
-                      <select className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500">
+                      <select 
+                        value={deliveryForm.vehicleType}
+                        onChange={(e) => handleFormChange('vehicleType', e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                      >
                         <option value="">Select vehicle</option>
                         <option value="bike">Bike</option>
                         <option value="auto">Auto Rickshaw</option>
@@ -548,6 +791,8 @@ const CustomerDashboard = () => {
                     <label className="block text-sm font-medium text-slate-700 mb-1">Special Instructions</label>
                     <textarea
                       rows={3}
+                      value={deliveryForm.specialInstructions}
+                      onChange={(e) => handleFormChange('specialInstructions', e.target.value)}
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
                       placeholder="Any special handling instructions..."
                     ></textarea>
@@ -559,19 +804,21 @@ const CustomerDashboard = () => {
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
                         <span className="text-slate-600">Base Fare</span>
-                        <span className="text-slate-900">₹50</span>
+                        <span className="text-slate-900">₹{fare.baseFare}</span>
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-600">Distance (8.2 km)</span>
-                        <span className="text-slate-900">₹82</span>
+                        <span className="text-slate-900">₹{fare.distanceCost}</span>
                       </div>
-                      <div className="flex justify-between text-green-600">
-                        <span>Pool Discount (40%)</span>
-                        <span>-₹53</span>
-                      </div>
+                      {deliveryForm.deliveryType === 'POOL' && (
+                        <div className="flex justify-between text-green-600">
+                          <span>Pool Discount (40%)</span>
+                          <span>-₹{fare.poolDiscount.toFixed(0)}</span>
+                        </div>
+                      )}
                       <div className="border-t border-slate-200 pt-2 flex justify-between font-semibold">
                         <span className="text-slate-900">Total</span>
-                        <span className="text-slate-900">₹79</span>
+                        <span className="text-slate-900">₹{fare.total.toFixed(0)}</span>
                       </div>
                     </div>
                   </div>
@@ -580,28 +827,52 @@ const CustomerDashboard = () => {
                   <div className="bg-white border border-slate-200 rounded-lg p-4">
                     <h4 className="font-medium text-slate-900 mb-3">Payment Method</h4>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <div className="border border-blue-500 bg-blue-50 rounded-lg p-3 cursor-pointer">
+                      <div 
+                        onClick={() => handleFormChange('paymentMethod', 'UPI')}
+                        className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                          deliveryForm.paymentMethod === 'UPI' 
+                            ? 'border-blue-500 bg-blue-50' 
+                            : 'border-slate-300 hover:border-slate-400'
+                        }`}
+                      >
                         <div className="text-center">
                           <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-2">
                             <DollarSign className="w-4 h-4 text-blue-600" />
                           </div>
                           <p className="text-sm font-medium text-slate-900">UPI</p>
+                          <p className="text-xs text-slate-600">PhonePe, GPay, Paytm</p>
                         </div>
                       </div>
-                      <div className="border border-slate-300 rounded-lg p-3 cursor-pointer hover:border-slate-400">
+                      <div 
+                        onClick={() => handleFormChange('paymentMethod', 'CARD')}
+                        className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                          deliveryForm.paymentMethod === 'CARD' 
+                            ? 'border-blue-500 bg-blue-50' 
+                            : 'border-slate-300 hover:border-slate-400'
+                        }`}
+                      >
                         <div className="text-center">
                           <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center mx-auto mb-2">
                             <DollarSign className="w-4 h-4 text-slate-600" />
                           </div>
                           <p className="text-sm font-medium text-slate-900">Card</p>
+                          <p className="text-xs text-slate-600">Credit/Debit Card</p>
                         </div>
                       </div>
-                      <div className="border border-slate-300 rounded-lg p-3 cursor-pointer hover:border-slate-400">
+                      <div 
+                        onClick={() => handleFormChange('paymentMethod', 'CASH')}
+                        className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                          deliveryForm.paymentMethod === 'CASH' 
+                            ? 'border-blue-500 bg-blue-50' 
+                            : 'border-slate-300 hover:border-slate-400'
+                        }`}
+                      >
                         <div className="text-center">
                           <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center mx-auto mb-2">
                             <DollarSign className="w-4 h-4 text-slate-600" />
                           </div>
-                          <p className="text-sm font-medium text-slate-900">Wallet</p>
+                          <p className="text-sm font-medium text-slate-900">Cash</p>
+                          <p className="text-xs text-slate-600">Pay on delivery</p>
                         </div>
                       </div>
                     </div>
@@ -609,12 +880,20 @@ const CustomerDashboard = () => {
 
                   <div className="flex items-center justify-between pt-6 border-t border-slate-200">
                     <div>
-                      <p className="text-sm text-slate-600">Pool delivery saves you ₹53</p>
-                      <p className="text-xs text-slate-500">Estimated delivery: 45-60 minutes</p>
+                      {deliveryForm.deliveryType === 'POOL' && (
+                        <p className="text-sm text-green-600">Pool delivery saves you ₹{fare.poolDiscount.toFixed(0)}</p>
+                      )}
+                      <p className="text-xs text-slate-500">
+                        Estimated delivery: {deliveryForm.deliveryType === 'POOL' ? '45-60 minutes' : '25-35 minutes'}
+                      </p>
                     </div>
                     <div className="flex items-center space-x-3">
                       <button
                         type="button"
+                        onClick={() => {
+                          // Recalculate fare - in real app this would call distance API
+                          alert(`Fare calculated: ₹${fare.total.toFixed(0)}`)
+                        }}
                         className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50"
                       >
                         Calculate Fare
@@ -623,7 +902,7 @@ const CustomerDashboard = () => {
                         type="submit"
                         className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2 rounded-lg font-medium"
                       >
-                        Pay & Book ₹79
+                        Pay & Book ₹{fare.total.toFixed(0)}
                       </button>
                     </div>
                   </div>
