@@ -1,0 +1,74 @@
+# PakkaDrop Local Development Requirements
+
+## System Requirements
+- Node.js 18+ (LTS recommended)
+- npm 8+ or yarn 1.22+
+- Git
+
+## Quick Setup
+
+1. Clone the repository
+   git clone <repository-url>
+   cd pakkadrop-platform
+
+2. Install dependencies
+   npm install
+
+3. Setup environment
+   cp .env.example .env
+   # Edit .env with your Firebase credentials (optional for demo mode)
+
+4. Initialize database
+   npm run db:migrate
+
+5. Start development servers
+   npm run dev
+   # This starts both backend (port 5004) and frontend (port 3006)
+
+## Alternative Commands
+
+Start servers separately:
+   npm run server    # Backend only (port 5004)
+   npm run client    # Frontend only (port 3006)
+
+## Access Points
+
+- Frontend: http://localhost:3006
+- Backend API: http://localhost:5004
+- Database Studio: npm run db:studio
+
+## Demo Mode
+
+The app works in demo mode without external services:
+- No Supabase setup required
+- Firebase optional (uses localStorage fallback)
+- SQLite database (auto-created)
+
+## Production Setup (Optional)
+
+For full functionality, configure:
+- Firebase Authentication
+- Supabase Database
+- Payment Gateway (Razorpay)
+- Maps API (MapMyIndia/Mapbox)
+- SMS Service (Twilio)
+
+## Troubleshooting
+
+Port conflicts:
+   lsof -ti:5004 | xargs kill -9  # Kill backend
+   lsof -ti:3006 | xargs kill -9  # Kill frontend
+
+Database issues:
+   npm run db:migrate  # Reset database
+
+Clear cache:
+   rm -rf node_modules package-lock.json
+   npm install
+
+## Support
+
+For issues, check:
+- Console logs in browser
+- Server logs in terminal
+- Database connection status
