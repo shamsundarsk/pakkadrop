@@ -8,6 +8,7 @@ import {
   User as FirebaseUser
 } from 'firebase/auth'
 import { auth } from '../config/firebase'
+import { userRegistrationService } from '../services/userRegistrationService'
 import toast from 'react-hot-toast'
 
 interface User {
@@ -154,6 +155,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setLoading(true)
       
+      // Check for duplicates before creating Firebase user
+      const validation = userRegistrationService.validateRegistrationData({
+        email: userData.email,
+        phone: userData.phone,
+        vehicleNumber: userData.vehicleNumber,
+        userType: userData.userType
+      })
+      
+      if (!validation.isValid) {
+        throw new Error(validation.errors[0])
+      }
+      
       // Create Firebase user first
       const { user: firebaseUser } = await createUserWithEmailAndPassword(
         auth, 
@@ -175,11 +188,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isActive: true
       }
 
+      // Register user in our service to prevent duplicates
+      userRegistrationService.registerUser(newUser)
+
       // Set user data immediately for demo mode
       setUser(newUser)
       
       // Store in localStorage for persistence in demo mode
       localStorage.setItem(`user_${firebaseUser.uid}`, JSON.stringify(newUser))
+      localStorage.setItem(`userType_${firebaseUser.uid}`, userData.userType)
 
       toast.success('Account created successfully!')
       

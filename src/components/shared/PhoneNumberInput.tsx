@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, AlertCircle, CheckCircle } from 'lucide-react'
+import { userRegistrationService } from '../../services/userRegistrationService'
 
 interface CountryCode {
   code: string
@@ -31,6 +32,8 @@ interface PhoneNumberInputProps {
   required?: boolean
   className?: string
   placeholder?: string
+  checkDuplicates?: boolean
+  currentUserId?: string // To exclude current user when updating
 }
 
 const PhoneNumberInput: React.FC<PhoneNumberInputProps> = ({
@@ -39,13 +42,17 @@ const PhoneNumberInput: React.FC<PhoneNumberInputProps> = ({
   error,
   required = false,
   className = "",
-  placeholder = "Enter phone number"
+  placeholder = "Enter phone number",
+  checkDuplicates = true,
+  currentUserId
 }) => {
   const [selectedCountry, setSelectedCountry] = useState<CountryCode>(countryCodes[0]) // Default to India
   const [showDropdown, setShowDropdown] = useState(false)
   const [phoneNumber, setPhoneNumber] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [filteredCountries, setFilteredCountries] = useState<CountryCode[]>(countryCodes)
+  const [isDuplicate, setIsDuplicate] = useState(false)
+  const [duplicateUser, setDuplicateUser] = useState<string | null>(null)
 
   // Filter countries based on search query
   React.useEffect(() => {
@@ -83,6 +90,29 @@ const PhoneNumberInput: React.FC<PhoneNumberInputProps> = ({
     
     // Format the complete phone number
     const fullNumber = limitedPhone ? `${selectedCountry.dialCode} ${limitedPhone}` : ''
+    
+    // Check for duplicates if enabled and phone is complete
+    if (checkDuplicates && fullNumber && limitedPhone.length === selectedCountry.maxLength) {
+      const isRegistered = userRegistrationService.isPhoneNumberRegistered(fullNumber)
+      if (isRegistered) {
+        const existingUser = userRegistrationService.getUserByPhone(fullNumber)
+        // Only show as duplicate if it's not the current user
+        if (!currentUserId || existingUser?.id !== currentUserId) {
+          setIsDuplicate(true)
+          setDuplicateUser(existingUser?.name || 'another user')
+        } else {
+          setIsDuplicate(false)
+          setDuplicateUser(null)
+        }
+      } else {
+        setIsDuplicate(false)
+        setDuplicateUser(null)
+      }
+    } else {
+      setIsDuplicate(false)
+      setDuplicateUser(null)
+    }
+    
     onChange(fullNumber)
   }
 
@@ -108,6 +138,11 @@ const PhoneNumberInput: React.FC<PhoneNumberInputProps> = ({
       return `Phone number must be ${selectedCountry.maxLength} digits for ${selectedCountry.country}`
     }
     
+    // Check for duplicates
+    if (checkDuplicates && isDuplicate) {
+      return `This phone number is already registered by ${duplicateUser}`
+    }
+    
     // India-specific validation
     if (selectedCountry.code === 'IN' && phone) {
       const validPrefixes = ['6', '7', '8', '9']
@@ -120,6 +155,7 @@ const PhoneNumberInput: React.FC<PhoneNumberInputProps> = ({
   }
 
   const validationError = validatePhoneNumber(phoneNumber)
+  const hasError = error || validationError || isDuplicate
 
   return (
     <div className={`relative ${className}`}>
@@ -182,21 +218,45 @@ const PhoneNumberInput: React.FC<PhoneNumberInputProps> = ({
         </div>
 
         {/* Phone Number Input */}
-        <input
-          type="tel"
-          value={phoneNumber}
-          onChange={(e) => handlePhoneChange(e.target.value)}
-          placeholder={placeholder}
-          className={`flex-1 px-3 py-2 border border-slate-300 rounded-r-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-            (error || validationError) ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''
-          }`}
-          maxLength={selectedCountry.maxLength}
-        />
+        <div className="relative flex-1">
+          <input
+            type="tel"
+            value={phoneNumber}
+            onChange={(e) => handlePhoneChange(e.target.value)}
+            placeholder={placeholder}
+            className={`w-full px-3 py-2 pr-8 border border-slate-300 rounded-r-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+              hasError ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''
+            } ${isDuplicate ? 'border-red-400' : phoneNumber.length === selectedCountry.maxLength && !isDuplicate ? 'border-green-400' : ''}`}
+            maxLength={selectedCountry.maxLength}
+          />
+          
+          {/* Status Icon */}
+          {phoneNumber.length === selectedCountry.maxLength && (
+            <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+              {isDuplicate ? (
+                <AlertCircle className="w-4 h-4 text-red-500" />
+              ) : (
+                <CheckCircle className="w-4 h-4 text-green-500" />
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Validation Messages */}
-      {(error || validationError) && (
-        <p className="mt-1 text-sm text-red-600">{error || validationError}</p>
+      {hasError && (
+        <div className={`mt-1 flex items-center space-x-1 ${isDuplicate ? 'text-red-600' : 'text-red-600'}`}>
+          {isDuplicate && <AlertCircle className="w-4 h-4" />}
+          <p className="text-sm">{error || validationError}</p>
+        </div>
+      )}
+
+      {/* Success Message */}
+      {phoneNumber.length === selectedCountry.maxLength && !hasError && (
+        <div className="mt-1 flex items-center space-x-1 text-green-600">
+          <CheckCircle className="w-4 h-4" />
+          <p className="text-sm">Phone number is available</p>
+        </div>
       )}
 
       {/* Helper Text */}

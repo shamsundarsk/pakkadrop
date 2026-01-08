@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
-import { ChevronDown, Info } from 'lucide-react'
+import { ChevronDown, Info, AlertCircle, CheckCircle } from 'lucide-react'
+import { userRegistrationService } from '../../services/userRegistrationService'
 
 interface StateCode {
   state: string
@@ -54,6 +55,8 @@ interface VehicleNumberInputProps {
   required?: boolean
   className?: string
   placeholder?: string
+  checkDuplicates?: boolean
+  currentUserId?: string // To exclude current user when updating
 }
 
 const VehicleNumberInput: React.FC<VehicleNumberInputProps> = ({
@@ -62,13 +65,17 @@ const VehicleNumberInput: React.FC<VehicleNumberInputProps> = ({
   error,
   required = false,
   className = "",
-  placeholder = "Enter vehicle number"
+  placeholder = "Enter vehicle number",
+  checkDuplicates = true,
+  currentUserId
 }) => {
   const [selectedState, setSelectedState] = useState<StateCode | null>(null)
   const [showDropdown, setShowDropdown] = useState(false)
   const [showInfo, setShowInfo] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [filteredStates, setFilteredStates] = useState<StateCode[]>(indianStateCodes)
+  const [isDuplicate, setIsDuplicate] = useState(false)
+  const [duplicateUser, setDuplicateUser] = useState<string | null>(null)
 
   // Filter states based on search query
   React.useEffect(() => {
@@ -134,7 +141,37 @@ const VehicleNumberInput: React.FC<VehicleNumberInputProps> = ({
       formattedNumber = formattedNumber.slice(0, 15)
     }
     
+    // Check for duplicates if enabled and vehicle number is complete
+    if (checkDuplicates && formattedNumber && isValidVehicleFormat(formattedNumber)) {
+      const isRegistered = userRegistrationService.isVehicleNumberRegistered(formattedNumber)
+      if (isRegistered) {
+        const existingUser = userRegistrationService.getUserByVehicleNumber(formattedNumber)
+        // Only show as duplicate if it's not the current user
+        if (!currentUserId || existingUser?.id !== currentUserId) {
+          setIsDuplicate(true)
+          setDuplicateUser(existingUser?.name || 'another driver')
+        } else {
+          setIsDuplicate(false)
+          setDuplicateUser(null)
+        }
+      } else {
+        setIsDuplicate(false)
+        setDuplicateUser(null)
+      }
+    } else {
+      setIsDuplicate(false)
+      setDuplicateUser(null)
+    }
+    
     onChange(formattedNumber)
+  }
+
+  // Helper function to check if vehicle format is complete and valid
+  const isValidVehicleFormat = (vehicleNum: string) => {
+    const upperNum = vehicleNum.toUpperCase().trim()
+    const bhPattern = /^\d{2}\s+BH\s+\d{4}\s+[A-Z]{2}$/
+    const standardPattern = /^[A-Z]{2,3}\s+\d{2}\s+[A-Z]{1,2}\s+\d{4}$/
+    return bhPattern.test(upperNum) || standardPattern.test(upperNum)
   }
 
   const handleStateChange = (state: StateCode) => {
@@ -172,6 +209,11 @@ const VehicleNumberInput: React.FC<VehicleNumberInputProps> = ({
       return 'Vehicle number must start with a valid Indian state/UT code'
     }
 
+    // Check for duplicates
+    if (checkDuplicates && isDuplicate) {
+      return `This vehicle number is already registered by ${duplicateUser}`
+    }
+
     // Validate format based on type
     if (matchingState.code === 'BH') {
       // BH Series format: 21 BH 1234 AB
@@ -191,6 +233,8 @@ const VehicleNumberInput: React.FC<VehicleNumberInputProps> = ({
   }
 
   const validationError = validateVehicleNumber(value)
+  const hasError = error || validationError || isDuplicate
+  const isComplete = isValidVehicleFormat(value)
 
   return (
     <div className={`relative ${className}`}>
@@ -263,15 +307,28 @@ const VehicleNumberInput: React.FC<VehicleNumberInputProps> = ({
         </div>
 
         {/* Vehicle Number Input */}
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => handleVehicleNumberChange(e.target.value)}
-          placeholder={selectedState ? selectedState.example : "Type vehicle number (auto-formatted)"}
-          className={`flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono ${
-            (error || validationError) ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''
-          }`}
-        />
+        <div className="relative flex-1">
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => handleVehicleNumberChange(e.target.value)}
+            placeholder="Type vehicle number (auto-formatted)"
+            className={`w-full px-3 py-2 pr-8 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono ${
+              hasError ? 'border-red-300 focus:ring-red-500 focus:border-red-500' : ''
+            } ${isDuplicate ? 'border-red-400' : isComplete && !isDuplicate ? 'border-green-400' : ''}`}
+          />
+          
+          {/* Status Icon */}
+          {isComplete && (
+            <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+              {isDuplicate ? (
+                <AlertCircle className="w-4 h-4 text-red-500" />
+              ) : (
+                <CheckCircle className="w-4 h-4 text-green-500" />
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Format Information */}
@@ -289,8 +346,19 @@ const VehicleNumberInput: React.FC<VehicleNumberInputProps> = ({
       )}
 
       {/* Validation Messages */}
-      {(error || validationError) && (
-        <p className="mt-1 text-sm text-red-600">{error || validationError}</p>
+      {hasError && (
+        <div className={`mt-1 flex items-center space-x-1 ${isDuplicate ? 'text-red-600' : 'text-red-600'}`}>
+          {isDuplicate && <AlertCircle className="w-4 h-4" />}
+          <p className="text-sm">{error || validationError}</p>
+        </div>
+      )}
+
+      {/* Success Message */}
+      {isComplete && !hasError && (
+        <div className="mt-1 flex items-center space-x-1 text-green-600">
+          <CheckCircle className="w-4 h-4" />
+          <p className="text-sm">Vehicle number is available</p>
+        </div>
       )}
 
       {/* Helper Text */}
