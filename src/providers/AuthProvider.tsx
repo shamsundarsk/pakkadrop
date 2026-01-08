@@ -8,7 +8,6 @@ import {
   User as FirebaseUser
 } from 'firebase/auth'
 import { auth } from '../config/firebase'
-import { supabase } from '../config/supabase'
 import toast from 'react-hot-toast'
 
 interface User {
@@ -62,13 +61,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true)
   const [token, setToken] = useState<string | null>(null)
 
-  // Server-only user validation with Firebase + Supabase hybrid
+  // Demo mode user validation - works without server
   const validateUserWithServer = async (firebaseUser: FirebaseUser) => {
     try {
       const idToken = await firebaseUser.getIdToken()
       setToken(idToken)
       
-      // First check localStorage for demo mode
+      // Check localStorage for existing user data
       const storedUser = localStorage.getItem(`user_${firebaseUser.uid}`)
       if (storedUser) {
         const userData = JSON.parse(storedUser)
@@ -77,11 +76,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return
       }
       
-      // If no stored user, create a basic one for existing Firebase users
+      // Create a basic user profile for new Firebase users
       const basicUser = {
         id: firebaseUser.uid,
         email: firebaseUser.email || '',
-        name: firebaseUser.displayName || 'User',
+        name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
         phone: firebaseUser.phoneNumber || '',
         userType: 'CUSTOMER' as const,
         companyName: undefined,
@@ -93,11 +92,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       setUser(basicUser)
       localStorage.setItem(`user_${firebaseUser.uid}`, JSON.stringify(basicUser))
-      console.log('✅ Created basic user profile for existing Firebase user')
+      console.log('✅ Created basic user profile for Firebase user (demo mode)')
       
     } catch (error) {
       console.error('User validation failed:', error)
-      setUser(null)
+      // Don't fail completely - create offline user
+      const offlineUser = {
+        id: firebaseUser.uid,
+        email: firebaseUser.email || '',
+        name: firebaseUser.displayName || 'User',
+        phone: '',
+        userType: 'CUSTOMER' as const,
+        companyName: undefined,
+        vehicleType: undefined,
+        vehicleNumber: undefined,
+        isVerified: false,
+        isActive: true
+      }
+      setUser(offlineUser)
       setToken(null)
     }
   }
@@ -110,8 +122,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           await validateUserWithServer(firebaseUser)
         } catch (error) {
-          // Don't force logout - user might just need to complete registration
+          // Don't force logout - user validation failed but Firebase auth is working
           console.log('User validation failed, but keeping Firebase session:', error)
+          // Create minimal user for demo mode
+          const minimalUser = {
+            id: firebaseUser.uid,
+            email: firebaseUser.email || '',
+            name: firebaseUser.displayName || 'User',
+            phone: '',
+            userType: 'CUSTOMER' as const,
+            companyName: undefined,
+            vehicleType: undefined,
+            vehicleNumber: undefined,
+            isVerified: false,
+            isActive: true
+          }
+          setUser(minimalUser)
         }
       } else {
         setUser(null)

@@ -1,74 +1,54 @@
 # PakkaDrop Local Development Requirements
 
-## System Requirements
-- Node.js 18+ (LTS recommended)
-- npm 8+ or yarn 1.22+
-- Git
+## Prerequisites
+- Node.js 18+ (https://nodejs.org/)
+- npm or yarn package manager
+- Git (https://git-scm.com/)
 
 ## Quick Setup
-
 1. Clone the repository
-   git clone <repository-url>
-   cd pakkadrop-platform
+2. Install dependencies: `npm install`
+3. Copy environment: `cp .env.example .env`
+4. Start development: `npm run dev`
 
-2. Install dependencies
-   npm install
+## Environment Setup
+- Firebase project (free tier works)
+- MapMyIndia API key (for maps)
+- Optional: Supabase account (demo mode works without)
 
-3. Setup environment
-   cp .env.example .env
-   # Edit .env with your Firebase credentials (optional for demo mode)
+## Development Commands
+- `npm run dev` - Start both frontend and backend
+- `npm run client` - Frontend only (port 3006)
+- `npm run server` - Backend only (port 5004)
+- `npm test` - Run tests
 
-4. Initialize database
-   npm run db:migrate
-
-5. Start development servers
-   npm run dev
-   # This starts both backend (port 5004) and frontend (port 3006)
-
-## Alternative Commands
-
-Start servers separately:
-   npm run server    # Backend only (port 5004)
-   npm run client    # Frontend only (port 3006)
-
-## Access Points
-
+## Default Ports
 - Frontend: http://localhost:3006
-- Backend API: http://localhost:5004
-- Database Studio: npm run db:studio
+- Backend: http://localhost:5004
+- Database: SQLite (local file)
 
-## Demo Mode
+## Demo Accounts
+- Customer: customer@demo.com / customer@123
+- Driver: driver@demo.com / driver@123
+- Business: business@demo.com / business@123
 
-The app works in demo mode without external services:
-- No Supabase setup required
-- Firebase optional (uses localStorage fallback)
-- SQLite database (auto-created)
+## Features Available
+✅ User authentication (Firebase)
+✅ Multi-role dashboards
+✅ Security middleware
+✅ Real-time notifications
+✅ Map integration ready
+✅ Payment gateway ready
+✅ Demo mode (no external DB required)
 
-## Production Setup (Optional)
-
-For full functionality, configure:
-- Firebase Authentication
-- Supabase Database
-- Payment Gateway (Razorpay)
-- Maps API (MapMyIndia/Mapbox)
-- SMS Service (Twilio)
-
-## Troubleshooting
-
-Port conflicts:
-   lsof -ti:5004 | xargs kill -9  # Kill backend
-   lsof -ti:3006 | xargs kill -9  # Kill frontend
-
-Database issues:
-   npm run db:migrate  # Reset database
-
-Clear cache:
-   rm -rf node_modules package-lock.json
-   npm install
+## Production Requirements
+- PostgreSQL database
+- Redis for caching
+- SSL certificates
+- Environment-specific secrets
+- CDN for static assets
 
 ## Support
-
-For issues, check:
-- Console logs in browser
-- Server logs in terminal
-- Database connection status
+- Check logs/ directory for error logs
+- Use browser dev tools for frontend issues
+- Server runs in demo mode by default
