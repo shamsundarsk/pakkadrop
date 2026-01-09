@@ -357,13 +357,13 @@ const DashboardRouter = () => {
   // Direct navigation based on user type
   switch (userType) {
     case 'CUSTOMER':
-      return <Navigate to="/customer-dashboard" replace />;
+      return <CustomerDashboard />;
     case 'BUSINESS':
-      return <Navigate to="/business-dashboard" replace />;
+      return <BusinessDashboard />;
     case 'DRIVER':
-      return <Navigate to="/driver-dashboard" replace />;
+      return <DriverDashboard />;
     case 'ADMIN':
-      return <Navigate to="/owner-dashboard" replace />;
+      return <OwnerDashboard />;
     default:
       return <UserTypeSelector />;
   }

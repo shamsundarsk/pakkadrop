@@ -73,7 +73,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (storedUser) {
         const userData = JSON.parse(storedUser)
         setUser(userData)
-        console.log('✅ User loaded from localStorage (demo mode)')
+        console.log('✅ User loaded from localStorage (demo mode)', userData)
         return
       }
       
@@ -93,6 +93,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       setUser(basicUser)
       localStorage.setItem(`user_${firebaseUser.uid}`, JSON.stringify(basicUser))
+      localStorage.setItem(`userType_${firebaseUser.uid}`, 'CUSTOMER')
       console.log('✅ Created basic user profile for Firebase user (demo mode)')
       
     } catch (error) {
@@ -111,6 +112,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isActive: true
       }
       setUser(offlineUser)
+      localStorage.setItem(`userType_${firebaseUser.uid}`, 'CUSTOMER')
       setToken(null)
     }
   }

@@ -1,0 +1,13 @@
+{
+  "timestamp": "2026-01-08T23:44:30.323Z",
+  "securityScore": 98,
+  "alerts": [
+    {
+      "severity": "LOW",
+      "message": "Suspicious files found: 2",
+      "action": "cleanup",
+      "timestamp": "2026-01-08T23:44:30.320Z"
+    }
+  ],
+  "recommendations": []
+}

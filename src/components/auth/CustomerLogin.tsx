@@ -33,8 +33,8 @@ const CustomerLogin = () => {
     try {
       if (isLogin) {
         await login(email, password)
-        // Navigate to dashboard route which will handle user type routing
-        setTimeout(() => navigate('/dashboard'), 500)
+        // Navigate to customer dashboard after successful login
+        setTimeout(() => navigate('/customer-dashboard'), 500)
       } else {
         await register({
           ...formData,
@@ -42,8 +42,8 @@ const CustomerLogin = () => {
           password,
           userType: 'CUSTOMER'
         })
-        // Navigate to dashboard route which will handle user type routing
-        setTimeout(() => navigate('/dashboard'), 500)
+        // Navigate to customer dashboard after successful registration
+        setTimeout(() => navigate('/customer-dashboard'), 500)
       }
     } catch (error) {
       // Error handled in AuthProvider

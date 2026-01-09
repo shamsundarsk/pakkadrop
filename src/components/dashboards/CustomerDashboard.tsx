@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '../../providers/AuthProvider'
 import Map from '../Map'
+import AddressAutocomplete from '../AddressAutocomplete'
+import EnhancedFareBreakdown from '../EnhancedFareBreakdown'
 import { poolingService, createPoolRequest } from '../../services/poolingService'
 import { deliveryService, useDeliveries, type Delivery } from '../../services/deliveryService'
+import { addressSuggestionService } from '../../services/addressSuggestionService'
+import { enhancedPricingService, type DetailedFareBreakdown } from '../../services/enhancedPricingService'
 import { 
   Package, 
   MapPin, 
@@ -17,14 +21,21 @@ import {
   Calendar,
   Filter,
   Search,
-  Users
+  Users,
+  Calculator,
+  Route,
+  Scale,
+  TrendingDown,
+  CheckCircle
 } from 'lucide-react'
 
 interface DeliveryForm {
   pickupAddress: string
+  pickupCoordinates?: { lat: number; lng: number }
   pickupContactName: string
   pickupContactPhone: string
   dropoffAddress: string
+  dropoffCoordinates?: { lat: number; lng: number }
   dropoffContactName: string
   dropoffContactPhone: string
   packageType: string
@@ -33,6 +44,13 @@ interface DeliveryForm {
   specialInstructions: string
   deliveryType: 'EXPRESS' | 'POOL'
   paymentMethod: 'UPI' | 'CARD' | 'CASH'
+}
+
+interface VehicleRecommendation {
+  vehicleType: string
+  suitable: boolean
+  reason: string
+  estimatedFare: number
 }
 
 const CustomerDashboard = () => {
@@ -98,28 +116,89 @@ const CustomerDashboard = () => {
     dropoffContactName: '',
     dropoffContactPhone: '',
     packageType: '',
-    weight: 0,
+    weight: 1,
     vehicleType: '',
     specialInstructions: '',
     deliveryType: 'POOL', // Default to pool for savings
     paymentMethod: 'UPI' // Default to UPI
   })
 
+  // Enhanced pricing state
+  const [fareBreakdown, setFareBreakdown] = useState<DetailedFareBreakdown | null>(null)
+  const [vehicleRecommendations, setVehicleRecommendations] = useState<VehicleRecommendation[]>([])
+  const [distance, setDistance] = useState<number>(0)
+  const [calculatingFare, setCalculatingFare] = useState(false)
+  const [fareCalculated, setFareCalculated] = useState(false)
+
   // Fare calculation based on form data
-  const calculateFare = () => {
-    const baseFare = 50
-    const distanceCost = 82 // Mock calculation
-    const total = baseFare + distanceCost
-    const poolDiscount = deliveryForm.deliveryType === 'POOL' ? total * 0.4 : 0
-    return {
-      baseFare,
-      distanceCost,
-      poolDiscount,
-      total: total - poolDiscount
+  const calculateFare = async () => {
+    if (!deliveryForm.pickupCoordinates || !deliveryForm.dropoffCoordinates || !deliveryForm.vehicleType || deliveryForm.weight <= 0) {
+      alert('Please fill in pickup address, dropoff address, vehicle type, and weight')
+      return
+    }
+
+    setCalculatingFare(true)
+    try {
+      // Calculate distance between pickup and dropoff
+      const calculatedDistance = addressSuggestionService['calculateDistance'](
+        deliveryForm.pickupCoordinates.lat,
+        deliveryForm.pickupCoordinates.lng,
+        deliveryForm.dropoffCoordinates.lat,
+        deliveryForm.dropoffCoordinates.lng
+      )
+      
+      setDistance(calculatedDistance)
+
+      // Calculate enhanced fare
+      const fareDetails = enhancedPricingService.calculateAutoFare(
+        calculatedDistance,
+        deliveryForm.weight,
+        deliveryForm.vehicleType as any,
+        deliveryForm.deliveryType,
+        deliveryForm.packageType
+      )
+
+      setFareBreakdown(fareDetails)
+      setFareCalculated(true)
+
+      // Get vehicle recommendations
+      const recommendations = enhancedPricingService.getVehicleRecommendations(
+        deliveryForm.weight,
+        calculatedDistance
+      )
+      setVehicleRecommendations(recommendations)
+
+    } catch (error) {
+      console.error('Error calculating fare:', error)
+      alert('Error calculating fare. Please try again.')
+    } finally {
+      setCalculatingFare(false)
     }
   }
 
-  const fare = calculateFare()
+  // Auto-calculate fare when key fields change
+  useEffect(() => {
+    if (deliveryForm.pickupCoordinates && 
+        deliveryForm.dropoffCoordinates && 
+        deliveryForm.vehicleType && 
+        deliveryForm.weight > 0) {
+      const debounceTimer = setTimeout(() => {
+        calculateFare()
+      }, 1000) // Auto-calculate after 1 second of no changes
+      
+      return () => clearTimeout(debounceTimer)
+    } else {
+      setFareBreakdown(null)
+      setFareCalculated(false)
+    }
+  }, [
+    deliveryForm.pickupCoordinates,
+    deliveryForm.dropoffCoordinates,
+    deliveryForm.vehicleType,
+    deliveryForm.weight,
+    deliveryForm.deliveryType,
+    deliveryForm.packageType
+  ])
 
   // Handle form input changes
   const handleFormChange = (field: keyof DeliveryForm, value: string | number) => {
@@ -129,13 +208,23 @@ const CustomerDashboard = () => {
     }))
   }
 
+  // Handle address changes with coordinates
+  const handleAddressChange = (field: 'pickupAddress' | 'dropoffAddress', address: string, coordinates?: { lat: number; lng: number }) => {
+    const coordinateField = field === 'pickupAddress' ? 'pickupCoordinates' : 'dropoffCoordinates'
+    setDeliveryForm(prev => ({
+      ...prev,
+      [field]: address,
+      [coordinateField]: coordinates
+    }))
+  }
+
   // Handle form submission
   const handleSubmitDelivery = async (e: React.FormEvent) => {
     e.preventDefault()
     
     // Validate required fields
-    if (!deliveryForm.pickupAddress || !deliveryForm.dropoffAddress || !deliveryForm.packageType) {
-      alert('Please fill in all required fields')
+    if (!deliveryForm.pickupAddress || !deliveryForm.dropoffAddress || !deliveryForm.packageType || !fareBreakdown) {
+      alert('Please fill in all required fields and calculate fare')
       return
     }
 
@@ -147,72 +236,40 @@ const CustomerDashboard = () => {
     try {
       console.log('Creating delivery:', deliveryForm)
       
-      // Calculate distance and fare (mock calculation)
-      const mockDistance = (Math.random() * 15 + 5).toFixed(1) // 5-20 km
-      const mockTime = Math.round(parseFloat(mockDistance) * 2.5 + 15) // rough time calculation
-      
-      // Create delivery using shared service
-      const newDelivery = createDelivery({
+      // Create delivery with enhanced data
+      const newDelivery: Omit<Delivery, 'id' | 'createdAt'> = {
         customerId: user.id,
         customerName: user.name || 'Customer',
         customerPhone: user.phone || '',
+        status: 'PENDING',
         pickup: {
           address: deliveryForm.pickupAddress,
-          contactName: deliveryForm.pickupContactName || user.name || 'Customer',
+          contactName: deliveryForm.pickupContactName || user.name || '',
           contactPhone: deliveryForm.pickupContactPhone || user.phone || '',
-          lat: 19.0760 + (Math.random() - 0.5) * 0.1, // Mock coordinates
-          lng: 72.8777 + (Math.random() - 0.5) * 0.1
+          lat: deliveryForm.pickupCoordinates?.lat,
+          lng: deliveryForm.pickupCoordinates?.lng
         },
         dropoff: {
           address: deliveryForm.dropoffAddress,
           contactName: deliveryForm.dropoffContactName,
           contactPhone: deliveryForm.dropoffContactPhone,
-          lat: 19.0760 + (Math.random() - 0.5) * 0.1, // Mock coordinates
-          lng: 72.8777 + (Math.random() - 0.5) * 0.1
+          lat: deliveryForm.dropoffCoordinates?.lat,
+          lng: deliveryForm.dropoffCoordinates?.lng
         },
         packageType: deliveryForm.packageType,
-        weight: deliveryForm.weight || 1,
-        vehicleType: deliveryForm.vehicleType || 'bike',
+        weight: deliveryForm.weight,
+        vehicleType: deliveryForm.vehicleType,
         deliveryType: deliveryForm.deliveryType,
         paymentMethod: deliveryForm.paymentMethod,
         specialInstructions: deliveryForm.specialInstructions,
-        fare: fare.total,
-        distance: `${mockDistance} km`,
-        estimatedTime: `${mockTime} min`
-      })
-      
-      let poolId = null
-      let poolInfo = null
-      
-      // If pool delivery is selected, try to find or create a pool
-      if (deliveryForm.deliveryType === 'POOL') {
-        const poolRequest = createPoolRequest({
-          ...deliveryForm,
-          customerId: user.id
-        })
-        
-        poolId = poolingService.addPoolRequest(poolRequest)
-        poolInfo = poolingService.getPool(poolId)
-        
-        console.log('Pool created/joined:', poolId, poolInfo)
+        fare: fareBreakdown.totalFare,
+        distance: `${distance.toFixed(1)} km`,
+        estimatedTime: `${fareBreakdown.estimatedTime} min`
       }
+
+      await createDelivery(newDelivery)
       
-      // Show success message
-      const successMessage = deliveryForm.deliveryType === 'POOL' && poolInfo && poolInfo.requests.length > 1
-        ? `🎉 Pool delivery booked! Matched with ${poolInfo.requests.length - 1} other customer(s). 
-           Order ID: ${newDelivery.id}
-           Total: ₹${fare.total.toFixed(0)}
-           
-           Your order is now visible to drivers!`
-        : `🎉 Delivery booked successfully! 
-           Order ID: ${newDelivery.id}
-           Total: ₹${fare.total.toFixed(0)}
-           
-           Your order is now visible to drivers!`
-      
-      alert(successMessage)
-      
-      // Reset form and switch to active tab
+      // Reset form
       setDeliveryForm({
         pickupAddress: '',
         pickupContactName: '',
@@ -221,16 +278,21 @@ const CustomerDashboard = () => {
         dropoffContactName: '',
         dropoffContactPhone: '',
         packageType: '',
-        weight: 0,
+        weight: 1,
         vehicleType: '',
         specialInstructions: '',
         deliveryType: 'POOL',
         paymentMethod: 'UPI'
       })
+      setFareBreakdown(null)
+      setFareCalculated(false)
+      setShowCreateDelivery(false)
       setActiveTab('active')
+      
+      alert('Delivery created successfully! Drivers will be notified.')
     } catch (error) {
       console.error('Error creating delivery:', error)
-      alert('Failed to create delivery. Please try again.')
+      alert('Error creating delivery. Please try again.')
     }
   }
 
@@ -669,121 +731,311 @@ const CustomerDashboard = () => {
                   </div>
                 </div>
 
-                <form onSubmit={handleSubmitDelivery} className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-4">
-                      <h4 className="font-medium text-slate-900">Pickup Details</h4>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Pickup Address *</label>
-                        <input
-                          type="text"
-                          required
+                <form onSubmit={handleSubmitDelivery} className="space-y-8">
+                  {/* Address Section */}
+                  <div className="bg-white rounded-xl border border-slate-200 p-6">
+                    <h4 className="font-semibold text-slate-900 mb-6 flex items-center space-x-2">
+                      <MapPin className="w-5 h-5 text-slate-600" />
+                      <span>Delivery Addresses</span>
+                    </h4>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                      <div className="space-y-4">
+                        <div className="flex items-center space-x-2 mb-3">
+                          <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                          <h5 className="font-medium text-slate-900">Pickup Details</h5>
+                        </div>
+                        
+                        <AddressAutocomplete
+                          label="Pickup Address"
                           value={deliveryForm.pickupAddress}
-                          onChange={(e) => handleFormChange('pickupAddress', e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                          onChange={(address, coordinates) => handleAddressChange('pickupAddress', address, coordinates)}
                           placeholder="Enter pickup address"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Contact Name</label>
-                        <input
-                          type="text"
-                          value={deliveryForm.pickupContactName}
-                          onChange={(e) => handleFormChange('pickupContactName', e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
-                          placeholder="Contact person name"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Contact Phone</label>
-                        <input
-                          type="tel"
-                          value={deliveryForm.pickupContactPhone}
-                          onChange={(e) => handleFormChange('pickupContactPhone', e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
-                          placeholder="+91 98765 43210"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <h4 className="font-medium text-slate-900">Dropoff Details</h4>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Dropoff Address *</label>
-                        <input
-                          type="text"
                           required
+                          showPopularDestinations
+                        />
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Contact Name</label>
+                            <input
+                              type="text"
+                              value={deliveryForm.pickupContactName}
+                              onChange={(e) => handleFormChange('pickupContactName', e.target.value)}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                              placeholder="Contact person"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Contact Phone</label>
+                            <input
+                              type="tel"
+                              value={deliveryForm.pickupContactPhone}
+                              onChange={(e) => handleFormChange('pickupContactPhone', e.target.value)}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                              placeholder="+91 98765 43210"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        <div className="flex items-center space-x-2 mb-3">
+                          <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                          <h5 className="font-medium text-slate-900">Dropoff Details</h5>
+                        </div>
+                        
+                        <AddressAutocomplete
+                          label="Dropoff Address"
                           value={deliveryForm.dropoffAddress}
-                          onChange={(e) => handleFormChange('dropoffAddress', e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                          onChange={(address, coordinates) => handleAddressChange('dropoffAddress', address, coordinates)}
                           placeholder="Enter dropoff address"
+                          required
+                          showPopularDestinations
                         />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Contact Name</label>
-                        <input
-                          type="text"
-                          value={deliveryForm.dropoffContactName}
-                          onChange={(e) => handleFormChange('dropoffContactName', e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
-                          placeholder="Contact person name"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Contact Phone</label>
-                        <input
-                          type="tel"
-                          value={deliveryForm.dropoffContactPhone}
-                          onChange={(e) => handleFormChange('dropoffContactPhone', e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
-                          placeholder="+91 98765 43210"
-                        />
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Contact Name</label>
+                            <input
+                              type="text"
+                              value={deliveryForm.dropoffContactName}
+                              onChange={(e) => handleFormChange('dropoffContactName', e.target.value)}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                              placeholder="Contact person"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Contact Phone</label>
+                            <input
+                              type="tel"
+                              value={deliveryForm.dropoffContactPhone}
+                              onChange={(e) => handleFormChange('dropoffContactPhone', e.target.value)}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                              placeholder="+91 98765 43210"
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Package Type *</label>
-                      <select 
-                        required
-                        value={deliveryForm.packageType}
-                        onChange={(e) => handleFormChange('packageType', e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
-                      >
-                        <option value="">Select package type</option>
-                        <option value="documents">Documents</option>
-                        <option value="electronics">Electronics</option>
-                        <option value="clothing">Clothing</option>
-                        <option value="food">Food Items</option>
-                        <option value="other">Other</option>
-                      </select>
+                  {/* Package Details Section */}
+                  <div className="bg-white rounded-xl border border-slate-200 p-6">
+                    <h4 className="font-semibold text-slate-900 mb-6 flex items-center space-x-2">
+                      <Package className="w-5 h-5 text-slate-600" />
+                      <span>Package Information</span>
+                    </h4>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Package Type *</label>
+                        <select 
+                          required
+                          value={deliveryForm.packageType}
+                          onChange={(e) => handleFormChange('packageType', e.target.value)}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                        >
+                          <option value="">Select package type</option>
+                          <option value="documents">📄 Documents</option>
+                          <option value="electronics">📱 Electronics</option>
+                          <option value="clothing">👕 Clothing</option>
+                          <option value="food">🍕 Food Items</option>
+                          <option value="fragile">🔸 Fragile Items</option>
+                          <option value="other">📦 Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1 flex items-center space-x-1">
+                          <Scale className="w-4 h-4" />
+                          <span>Weight (kg) *</span>
+                        </label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0.1"
+                          max="1000"
+                          required
+                          value={deliveryForm.weight || ''}
+                          onChange={(e) => handleFormChange('weight', parseFloat(e.target.value) || 1)}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                          placeholder="1.0"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Vehicle Type *</label>
+                        <select 
+                          required
+                          value={deliveryForm.vehicleType}
+                          onChange={(e) => handleFormChange('vehicleType', e.target.value)}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                        >
+                          <option value="">Select vehicle</option>
+                          <option value="bike">🏍️ Bike (up to 10kg)</option>
+                          <option value="auto">🛺 Auto Rickshaw (up to 50kg)</option>
+                          <option value="mini-truck">🚛 Mini Truck (up to 500kg)</option>
+                          <option value="pickup">🚚 Pickup Truck (up to 1000kg)</option>
+                        </select>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Weight (kg)</label>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        value={deliveryForm.weight || ''}
-                        onChange={(e) => handleFormChange('weight', parseFloat(e.target.value) || 0)}
+
+                    <div className="mt-6">
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Special Instructions</label>
+                      <textarea
+                        rows={3}
+                        value={deliveryForm.specialInstructions}
+                        onChange={(e) => handleFormChange('specialInstructions', e.target.value)}
                         className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
-                        placeholder="0.0"
-                      />
+                        placeholder="Any special handling instructions..."
+                      ></textarea>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Vehicle Type</label>
-                      <select 
-                        value={deliveryForm.vehicleType}
-                        onChange={(e) => handleFormChange('vehicleType', e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-500"
+                  </div>
+
+                  {/* Vehicle Recommendations */}
+                  {vehicleRecommendations.length > 0 && (
+                    <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-xl p-6 border border-amber-200">
+                      <h4 className="font-semibold text-slate-900 mb-4 flex items-center space-x-2">
+                        <Truck className="w-5 h-5 text-amber-600" />
+                        <span>Vehicle Recommendations</span>
+                        <span className="bg-amber-100 text-amber-700 text-xs px-2 py-1 rounded-full">
+                          Based on weight & distance
+                        </span>
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {vehicleRecommendations.map((rec) => (
+                          <div
+                            key={rec.vehicleType}
+                            className={`p-4 rounded-xl border-2 cursor-pointer transition-all duration-200 ${
+                              rec.suitable
+                                ? deliveryForm.vehicleType === rec.vehicleType
+                                  ? 'border-blue-500 bg-blue-50 shadow-lg'
+                                  : 'border-green-300 bg-green-50 hover:border-green-400 hover:shadow-md'
+                                : 'border-red-300 bg-red-50 opacity-75 cursor-not-allowed'
+                            }`}
+                            onClick={() => rec.suitable && handleFormChange('vehicleType', rec.vehicleType)}
+                          >
+                            <div className="flex justify-between items-start">
+                              <div className="flex-1">
+                                <div className="flex items-center space-x-2 mb-2">
+                                  <span className="text-lg">
+                                    {rec.vehicleType === 'bike' ? '🏍️' : 
+                                     rec.vehicleType === 'auto' ? '🛺' : 
+                                     rec.vehicleType === 'mini-truck' ? '🚛' : '🚚'}
+                                  </span>
+                                  <div className="font-semibold text-slate-900 capitalize">
+                                    {rec.vehicleType.replace('-', ' ')}
+                                  </div>
+                                  {rec.suitable && (
+                                    <CheckCircle className="w-4 h-4 text-green-500" />
+                                  )}
+                                </div>
+                                <div className={`text-sm ${rec.suitable ? 'text-green-600' : 'text-red-600'}`}>
+                                  {rec.reason}
+                                </div>
+                              </div>
+                              {rec.suitable && (
+                                <div className="text-right">
+                                  <div className="font-bold text-slate-900 text-lg">
+                                    ₹{rec.estimatedFare}
+                                  </div>
+                                  <div className="text-xs text-slate-500">estimated</div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Delivery Type Selection - Single, Improved Design */}
+                  <div className="bg-gradient-to-r from-blue-50 to-green-50 rounded-xl p-6 border border-slate-200">
+                    <h4 className="font-semibold text-slate-900 mb-4 flex items-center space-x-2">
+                      <Truck className="w-5 h-5 text-slate-600" />
+                      <span>Choose Delivery Type</span>
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div 
+                        onClick={() => handleFormChange('deliveryType', 'POOL')}
+                        className={`relative border-2 rounded-xl p-6 cursor-pointer transition-all duration-200 ${
+                          deliveryForm.deliveryType === 'POOL' 
+                            ? 'border-green-500 bg-green-50 shadow-lg transform scale-105' 
+                            : 'border-slate-200 hover:border-green-300 hover:shadow-md'
+                        }`}
                       >
-                        <option value="">Select vehicle</option>
-                        <option value="bike">Bike</option>
-                        <option value="auto">Auto Rickshaw</option>
-                        <option value="mini-truck">Mini Truck</option>
-                        <option value="pickup">Pickup Truck</option>
-                      </select>
+                        {deliveryForm.deliveryType === 'POOL' && (
+                          <div className="absolute -top-2 -right-2 w-6 h-6 bg-green-500 rounded-full flex items-center justify-center">
+                            <CheckCircle className="w-4 h-4 text-white" />
+                          </div>
+                        )}
+                        <div className="flex items-start space-x-4">
+                          <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                            <Users className="w-6 h-6 text-green-600" />
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center space-x-2 mb-2">
+                              <h5 className="font-semibold text-slate-900">Pool Delivery</h5>
+                              <span className="bg-green-100 text-green-700 text-xs px-2 py-1 rounded-full font-medium">
+                                Save 40%
+                              </span>
+                            </div>
+                            <p className="text-sm text-slate-600 mb-3">
+                              Share delivery with others going in the same direction
+                            </p>
+                            <div className="space-y-1 text-xs text-slate-500">
+                              <div className="flex items-center space-x-1">
+                                <Clock className="w-3 h-3" />
+                                <span>45-60 minutes</span>
+                              </div>
+                              <div className="flex items-center space-x-1">
+                                <TrendingDown className="w-3 h-3" />
+                                <span>Eco-friendly option</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div 
+                        onClick={() => handleFormChange('deliveryType', 'EXPRESS')}
+                        className={`relative border-2 rounded-xl p-6 cursor-pointer transition-all duration-200 ${
+                          deliveryForm.deliveryType === 'EXPRESS' 
+                            ? 'border-blue-500 bg-blue-50 shadow-lg transform scale-105' 
+                            : 'border-slate-200 hover:border-blue-300 hover:shadow-md'
+                        }`}
+                      >
+                        {deliveryForm.deliveryType === 'EXPRESS' && (
+                          <div className="absolute -top-2 -right-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
+                            <CheckCircle className="w-4 h-4 text-white" />
+                          </div>
+                        )}
+                        <div className="flex items-start space-x-4">
+                          <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                            <Clock className="w-6 h-6 text-blue-600" />
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center space-x-2 mb-2">
+                              <h5 className="font-semibold text-slate-900">Express Delivery</h5>
+                              <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-full font-medium">
+                                Fast
+                              </span>
+                            </div>
+                            <p className="text-sm text-slate-600 mb-3">
+                              Direct delivery with priority handling
+                            </p>
+                            <div className="space-y-1 text-xs text-slate-500">
+                              <div className="flex items-center space-x-1">
+                                <Clock className="w-3 h-3" />
+                                <span>25-35 minutes</span>
+                              </div>
+                              <div className="flex items-center space-x-1">
+                                <Navigation className="w-3 h-3" />
+                                <span>Direct route</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -798,112 +1050,150 @@ const CustomerDashboard = () => {
                     ></textarea>
                   </div>
 
-                  {/* Fare Breakdown */}
-                  <div className="bg-slate-50 rounded-lg p-4">
-                    <h4 className="font-medium text-slate-900 mb-3">Fare Breakdown</h4>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-slate-600">Base Fare</span>
-                        <span className="text-slate-900">₹{fare.baseFare}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-600">Distance (8.2 km)</span>
-                        <span className="text-slate-900">₹{fare.distanceCost}</span>
-                      </div>
-                      {deliveryForm.deliveryType === 'POOL' && (
-                        <div className="flex justify-between text-green-600">
-                          <span>Pool Discount (40%)</span>
-                          <span>-₹{fare.poolDiscount.toFixed(0)}</span>
-                        </div>
-                      )}
-                      <div className="border-t border-slate-200 pt-2 flex justify-between font-semibold">
-                        <span className="text-slate-900">Total</span>
-                        <span className="text-slate-900">₹{fare.total.toFixed(0)}</span>
-                      </div>
-                    </div>
-                  </div>
+                  {/* Enhanced Fare Breakdown */}
+                  {fareBreakdown && (
+                    <EnhancedFareBreakdown
+                      fareBreakdown={fareBreakdown}
+                      distance={distance}
+                      weight={deliveryForm.weight}
+                      vehicleType={deliveryForm.vehicleType}
+                      deliveryType={deliveryForm.deliveryType}
+                      className="mt-6"
+                    />
+                  )}
 
                   {/* Payment Method */}
-                  <div className="bg-white border border-slate-200 rounded-lg p-4">
-                    <h4 className="font-medium text-slate-900 mb-3">Payment Method</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="bg-white border border-slate-200 rounded-xl p-6">
+                    <h4 className="font-semibold text-slate-900 mb-4 flex items-center space-x-2">
+                      <DollarSign className="w-5 h-5 text-slate-600" />
+                      <span>Payment Method</span>
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div 
                         onClick={() => handleFormChange('paymentMethod', 'UPI')}
-                        className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                        className={`border-2 rounded-xl p-4 cursor-pointer transition-all duration-200 ${
                           deliveryForm.paymentMethod === 'UPI' 
-                            ? 'border-blue-500 bg-blue-50' 
-                            : 'border-slate-300 hover:border-slate-400'
+                            ? 'border-blue-500 bg-blue-50 shadow-lg' 
+                            : 'border-slate-300 hover:border-slate-400 hover:shadow-md'
                         }`}
                       >
                         <div className="text-center">
-                          <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-2">
-                            <DollarSign className="w-4 h-4 text-blue-600" />
+                          <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center mx-auto mb-3">
+                            <span className="text-2xl">💳</span>
                           </div>
-                          <p className="text-sm font-medium text-slate-900">UPI</p>
+                          <p className="font-semibold text-slate-900 mb-1">UPI</p>
                           <p className="text-xs text-slate-600">PhonePe, GPay, Paytm</p>
+                          {deliveryForm.paymentMethod === 'UPI' && (
+                            <div className="mt-2">
+                              <CheckCircle className="w-4 h-4 text-blue-500 mx-auto" />
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div 
                         onClick={() => handleFormChange('paymentMethod', 'CARD')}
-                        className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                        className={`border-2 rounded-xl p-4 cursor-pointer transition-all duration-200 ${
                           deliveryForm.paymentMethod === 'CARD' 
-                            ? 'border-blue-500 bg-blue-50' 
-                            : 'border-slate-300 hover:border-slate-400'
+                            ? 'border-blue-500 bg-blue-50 shadow-lg' 
+                            : 'border-slate-300 hover:border-slate-400 hover:shadow-md'
                         }`}
                       >
                         <div className="text-center">
-                          <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center mx-auto mb-2">
-                            <DollarSign className="w-4 h-4 text-slate-600" />
+                          <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center mx-auto mb-3">
+                            <span className="text-2xl">💳</span>
                           </div>
-                          <p className="text-sm font-medium text-slate-900">Card</p>
+                          <p className="font-semibold text-slate-900 mb-1">Card</p>
                           <p className="text-xs text-slate-600">Credit/Debit Card</p>
+                          {deliveryForm.paymentMethod === 'CARD' && (
+                            <div className="mt-2">
+                              <CheckCircle className="w-4 h-4 text-blue-500 mx-auto" />
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div 
                         onClick={() => handleFormChange('paymentMethod', 'CASH')}
-                        className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                        className={`border-2 rounded-xl p-4 cursor-pointer transition-all duration-200 ${
                           deliveryForm.paymentMethod === 'CASH' 
-                            ? 'border-blue-500 bg-blue-50' 
-                            : 'border-slate-300 hover:border-slate-400'
+                            ? 'border-blue-500 bg-blue-50 shadow-lg' 
+                            : 'border-slate-300 hover:border-slate-400 hover:shadow-md'
                         }`}
                       >
                         <div className="text-center">
-                          <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center mx-auto mb-2">
-                            <DollarSign className="w-4 h-4 text-slate-600" />
+                          <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center mx-auto mb-3">
+                            <span className="text-2xl">💵</span>
                           </div>
-                          <p className="text-sm font-medium text-slate-900">Cash</p>
+                          <p className="font-semibold text-slate-900 mb-1">Cash</p>
                           <p className="text-xs text-slate-600">Pay on delivery</p>
+                          {deliveryForm.paymentMethod === 'CASH' && (
+                            <div className="mt-2">
+                              <CheckCircle className="w-4 h-4 text-blue-500 mx-auto" />
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between pt-6 border-t border-slate-200">
-                    <div>
-                      {deliveryForm.deliveryType === 'POOL' && (
-                        <p className="text-sm text-green-600">Pool delivery saves you ₹{fare.poolDiscount.toFixed(0)}</p>
-                      )}
-                      <p className="text-xs text-slate-500">
-                        Estimated delivery: {deliveryForm.deliveryType === 'POOL' ? '45-60 minutes' : '25-35 minutes'}
-                      </p>
-                    </div>
-                    <div className="flex items-center space-x-3">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          // Recalculate fare - in real app this would call distance API
-                          alert(`Fare calculated: ₹${fare.total.toFixed(0)}`)
-                        }}
-                        className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50"
-                      >
-                        Calculate Fare
-                      </button>
-                      <button
-                        type="submit"
-                        className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2 rounded-lg font-medium"
-                      >
-                        Pay & Book ₹{fare.total.toFixed(0)}
-                      </button>
+                  {/* Submit Section */}
+                  <div className="bg-gradient-to-r from-slate-50 to-slate-100 rounded-xl p-6 border border-slate-200">
+                    <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between space-y-4 lg:space-y-0">
+                      <div className="flex-1">
+                        {fareBreakdown && deliveryForm.deliveryType === 'POOL' && (
+                          <div className="flex items-center space-x-2 text-green-600 mb-2">
+                            <TrendingDown className="w-5 h-5" />
+                            <span className="font-semibold">Pool delivery saves you ₹{fareBreakdown.poolDiscount.toFixed(0)}</span>
+                          </div>
+                        )}
+                        <p className="text-sm text-slate-600">
+                          {fareBreakdown ? (
+                            <>
+                              <Clock className="w-4 h-4 inline mr-1" />
+                              Estimated delivery: {fareBreakdown.estimatedTime} minutes
+                            </>
+                          ) : (
+                            'Fill in all details to see estimated delivery time'
+                          )}
+                        </p>
+                        {distance > 0 && (
+                          <p className="text-xs text-slate-500 mt-1">
+                            <MapPin className="w-3 h-3 inline mr-1" />
+                            Distance: {distance.toFixed(1)} km
+                          </p>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-center space-x-4">
+                        <button
+                          type="button"
+                          onClick={calculateFare}
+                          disabled={calculatingFare || !deliveryForm.pickupCoordinates || !deliveryForm.dropoffCoordinates || !deliveryForm.vehicleType || deliveryForm.weight <= 0}
+                          className="px-6 py-3 border-2 border-slate-300 rounded-xl text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 font-medium transition-all duration-200"
+                        >
+                          {calculatingFare ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-slate-500"></div>
+                              <span>Calculating...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Calculator className="w-4 h-4" />
+                              <span>Calculate Fare</span>
+                            </>
+                          )}
+                        </button>
+                        
+                        <button
+                          type="submit"
+                          disabled={!fareCalculated || !fareBreakdown}
+                          className="bg-gradient-to-r from-slate-900 to-slate-800 hover:from-slate-800 hover:to-slate-700 text-white px-8 py-3 rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 shadow-lg transition-all duration-200 transform hover:scale-105"
+                        >
+                          <DollarSign className="w-5 h-5" />
+                          <span>
+                            {fareBreakdown ? `Pay & Book ₹${fareBreakdown.totalFare}` : 'Calculate Fare First'}
+                          </span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </form>

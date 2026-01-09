@@ -48,7 +48,8 @@ const DriverLogin = () => {
     try {
       if (isLogin) {
         await login(email, password)
-        setTimeout(() => navigate('/dashboard'), 500)
+        // Navigate to driver dashboard after successful login
+        setTimeout(() => navigate('/driver-dashboard'), 500)
       } else {
         await register({
           ...formData,
@@ -56,7 +57,8 @@ const DriverLogin = () => {
           password,
           userType: 'DRIVER'
         })
-        setTimeout(() => navigate('/dashboard'), 500)
+        // Navigate to driver dashboard after successful registration
+        setTimeout(() => navigate('/driver-dashboard'), 500)
       }
     } catch (error) {
       // Error handled in AuthProvider
